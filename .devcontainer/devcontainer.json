@@ -1,6 +1,12 @@
 {
     "name": "pintos-dev",
-    "dockerFile": "Dockerfile",
+    "build": {
+        "dockerfile": "Dockerfile",
+        "options": ["--platform=linux/amd64"]
+    },
+    "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/pintos_22.04_lab_docker,type=bind",
+    "workspaceFolder": "/workspaces/pintos_22.04_lab_docker",
+    "runArgs": ["--platform=linux/amd64"],
     "remoteUser": "jungle",
     "customizations": {
         "vscode": {
