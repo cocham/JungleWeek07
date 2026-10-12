@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  pintos:
+    build:
+      context: .devcontainer
+      dockerfile: Dockerfile
+    image: pintos-kaist-dev:latest
+    container_name: pintos-week07
+    platform: linux/amd64
+    working_dir: /workspaces/pintos_22.04_lab_docker
+    volumes:
+      - .:/workspaces/pintos_22.04_lab_docker
+    stdin_open: true
+    tty: true
+    privileged: true
+    restart: unless-stopped
