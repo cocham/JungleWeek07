@@ -1,0 +1,10 @@
+# Ensure LF line endings for all pintos files in Linux container
+* text eol=lf
+*.sh text eol=lf
+*.pm text eol=lf
+*.pl text eol=lf
+activate text eol=lf
+pintos text eol=lf
+backtrace text eol=lf
+pintos-gdb text eol=lf
+pintos-mkdisk text eol=lf
