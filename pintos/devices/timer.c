@@ -29,6 +29,10 @@ static bool too_many_loops (unsigned loops);
 static void busy_wait (int64_t loops);
 static void real_time_sleep (int64_t num, int32_t denom);
 
+/* 잠든 스레드 목록. 타이머 인터럽트가 매 tick 확인해서 깨운다. */
+static struct list sleep_list;
+
+
 /* Sets up the 8254 Programmable Interval Timer (PIT) to
    interrupt PIT_FREQ times per second, and registers the
    corresponding interrupt. */
@@ -43,6 +47,7 @@ timer_init (void) {
 	outb (0x40, count >> 8);
 
 	intr_register_ext (0x20, timer_interrupt, "8254 Timer");
+	list_init (&sleep_list);
 }
 
 /* Calibrates loops_per_tick, used to implement brief delays. */
@@ -87,14 +92,42 @@ timer_elapsed (int64_t then) {
 	return timer_ticks () - then;
 }
 
-/* Suspends execution for approximately TICKS timer ticks. */
 void
 timer_sleep (int64_t ticks) {
-	int64_t start = timer_ticks ();
+	int64_t start = timer_ticks (); /* 시간 기록(부팅 후 지난 tick 수) */
+	struct thread *cur = thread_current();
+	enum intr_level old_level;
 
-	ASSERT (intr_get_level () == INTR_ON);
-	while (timer_elapsed (start) < ticks)
-		thread_yield ();
+	ASSERT (intr_get_level () == INTR_ON); /* 인터럽트 꺼진 구간에서 호출 X */
+	ASSERT (!intr_context ()); /* 인터럽트 핸들러 안에서 호출 X */
+	/* 깨우는 쪽이 리스트에서 꺼낸 뒤 시각을 비교할 수 있게 스레드에 저장한다. */
+	cur->wakeup_tick = start + ticks;
+
+	/* sleep list 는 타이머 인터럽트도 읽으므로, 넣기와 잠들기 사이에 끼어들지 못하게 막는다. */
+	old_level = intr_disable ();
+	list_push_back(&sleep_list, &cur->elem);
+	thread_block ();
+	intr_set_level (old_level);
+}
+
+/* 깰 시각이 된 스레드를 sleep list 에서 빼서 깨운다.
+   타이머 인터럽트 안에서 불리므로 인터럽트는 이미 꺼져 있다. */
+static void
+timer_alarm(int64_t now) {
+	struct list_elem *e = list_begin(&sleep_list);
+
+	while (e != list_end (&sleep_list)) {
+		struct thread *t = list_entry(e, struct thread, elem);
+
+		/* 0 이나 음수로 잠들면 깰 시각이 이미 지나 있으므로 == 가 아니라 <= 로 본다. */
+		if (t->wakeup_tick <= now) {
+			/* list_remove 는 다음 원소를 돌려주므로, 뺀 뒤 list_next 를 쓰면 안 된다. */
+			e = list_remove(e);
+			thread_unblock(t);
+		} else {
+			e = list_next(e);
+		}
+	}
 }
 
 /* Suspends execution for approximately MS milliseconds. */
@@ -120,12 +153,13 @@ void
 timer_print_stats (void) {
 	printf ("Timer: %"PRId64" ticks\n", timer_ticks ());
 }
-
+
 /* Timer interrupt handler. */
 static void
 timer_interrupt (struct intr_frame *args UNUSED) {
 	ticks++;
 	thread_tick ();
+	timer_alarm (ticks);
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer
