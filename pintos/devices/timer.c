@@ -95,21 +95,19 @@ timer_elapsed (int64_t then) {
 void
 timer_sleep (int64_t ticks) {
 	int64_t start = timer_ticks (); /* 시간 기록(부팅 후 지난 tick 수) */
-	struct thread *cur = thread_current(); 
+	struct thread *cur = thread_current();
 	enum intr_level old_level;
 
 	ASSERT (intr_get_level () == INTR_ON); /* 인터럽트 꺼진 구간에서 호출 X */
 	ASSERT (!intr_context ()); /* 인터럽트 핸들러 안에서 호출 X */
-	
 	/* 깨우는 쪽이 리스트에서 꺼낸 뒤 시각을 비교할 수 있게 스레드에 저장한다. */
 	cur->wakeup_tick = start + ticks;
 
 	/* sleep list 는 타이머 인터럽트도 읽으므로, 넣기와 잠들기 사이에 끼어들지 못하게 막는다. */
 	old_level = intr_disable ();
-	list_push_back(&sleep_list, &cur->elem); 
-	thread_block (); 
-	intr_set_level (old_level); 
-	
+	list_push_back(&sleep_list, &cur->elem);
+	thread_block ();
+	intr_set_level (old_level);
 }
 
 /* 깰 시각이 된 스레드를 sleep list 에서 빼서 깨운다.
@@ -122,9 +120,9 @@ timer_alarm(int64_t now) {
 		struct thread *t = list_entry(e, struct thread, elem);
 
 		/* 0 이나 음수로 잠들면 깰 시각이 이미 지나 있으므로 == 가 아니라 <= 로 본다. */
-		if (t->wakeup_tick <= now) { 
+		if (t->wakeup_tick <= now) {
 			/* list_remove 는 다음 원소를 돌려주므로, 뺀 뒤 list_next 를 쓰면 안 된다. */
-			e = list_remove(e); 
+			e = list_remove(e);
 			thread_unblock(t);
 		} else {
 			e = list_next(e);
