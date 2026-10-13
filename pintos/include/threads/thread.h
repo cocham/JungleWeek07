@@ -88,13 +88,13 @@ typedef int tid_t;
 struct thread {
 	/* Owned by thread.c. */
 	tid_t tid;                          /* Thread identifier. */
+	int64_t wakeup_tick;                /* 깨울 시각 (tick). alarm. */
 	enum thread_status status;          /* Thread state. */
 	char name[16];                      /* Name (for debugging purposes). */
 	int priority;                       /* Priority. */
 
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
-	int64_t wakeup_tick;					 /* 깨울 시각 (tick). alarm. */
 
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */
@@ -136,6 +136,8 @@ void thread_yield (void);
 
 int thread_get_priority (void);
 void thread_set_priority (int);
+bool thread_diff (const struct list_elem *, const struct list_elem *, void *aux);
+void thread_yield_priority (void);
 
 int thread_get_nice (void);
 void thread_set_nice (int);

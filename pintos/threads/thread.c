@@ -27,7 +27,6 @@
 /* List of processes in THREAD_READY state, that is, processes
    that are ready to run but not actually running. */
 static struct list ready_list;
-
 /* Idle thread. */
 static struct thread *idle_thread;
 
@@ -207,6 +206,8 @@ thread_create (const char *name, int priority,
 	/* Add to run queue. */
 	thread_unblock (t);
 
+	thread_yield_priority ();
+
 	return tid;
 }
 
@@ -222,6 +223,28 @@ thread_block (void) {
 	ASSERT (intr_get_level () == INTR_OFF);
 	thread_current ()->status = THREAD_BLOCKED;
 	schedule ();
+}
+
+/* 두 스레드의 우선순위를 비교한다.
+   elem_1 스레드의 우선순위가 elem_2보다 높으면 true를 반환한다. */
+bool
+thread_diff (const struct list_elem *elem_1, const struct list_elem *elem_2, void *aux UNUSED) {
+	struct thread *thread_1 = list_entry (elem_1, struct thread, elem);
+	struct thread *thread_2 = list_entry (elem_2, struct thread, elem);
+
+	return thread_1->priority > thread_2->priority;
+}
+
+/* 레디 큐 맨 앞의 최고 우선순위 스레드가 현재 스레드보다 우선순위가 높으면 CPU를 양보한다. */
+void
+thread_yield_priority (void) {
+	if (!list_empty (&ready_list)) {
+		struct list_elem *elem = list_begin (&ready_list);
+		struct thread *thread_1 = list_entry (elem, struct thread, elem);
+
+		if (thread_1->priority > thread_current ()->priority)
+			thread_yield ();
+	}
 }
 
 /* Transitions a blocked thread T to the ready-to-run state.
@@ -240,7 +263,7 @@ thread_unblock (struct thread *t) {
 
 	old_level = intr_disable ();
 	ASSERT (t->status == THREAD_BLOCKED);
-	list_push_back (&ready_list, &t->elem);
+	list_insert_ordered (&ready_list, &t->elem, thread_diff, NULL);
 	t->status = THREAD_READY;
 	intr_set_level (old_level);
 }
@@ -303,7 +326,7 @@ thread_yield (void) {
 
 	old_level = intr_disable ();
 	if (curr != idle_thread)
-		list_push_back (&ready_list, &curr->elem);
+		list_insert_ordered (&ready_list, &curr->elem, thread_diff, NULL);
 	do_schedule (THREAD_READY);
 	intr_set_level (old_level);
 }
@@ -312,6 +335,7 @@ thread_yield (void) {
 void
 thread_set_priority (int new_priority) {
 	thread_current ()->priority = new_priority;
+	thread_yield_priority ();
 }
 
 /* Returns the current thread's priority. */
