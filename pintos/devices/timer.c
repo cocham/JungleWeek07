@@ -29,6 +29,8 @@ static bool too_many_loops (unsigned loops);
 static void busy_wait (int64_t loops);
 static void real_time_sleep (int64_t num, int32_t denom);
 
+static struct list sleep_list;
+
 /* Sets up the 8254 Programmable Interval Timer (PIT) to
    interrupt PIT_FREQ times per second, and registers the
    corresponding interrupt. */
@@ -43,6 +45,8 @@ timer_init (void) {
 	outb (0x40, count >> 8);
 
 	intr_register_ext (0x20, timer_interrupt, "8254 Timer");
+
+	list_init(&sleep_list);
 }
 
 /* Calibrates loops_per_tick, used to implement brief delays. */
@@ -89,12 +93,43 @@ timer_elapsed (int64_t then) {
 
 /* Suspends execution for approximately TICKS timer ticks. */
 void
-timer_sleep (int64_t ticks) {
-	int64_t start = timer_ticks ();
+timer_sleep (int64_t ticks) { // 스레드가 특정 틱 동안 자는 것을 요청하는 함수이다.
+	if (ticks > 0) // 0초 이하로 자는 것은 말이 되지 않으니 사전에 방지하는 것이다.
+	{
+		int64_t start = timer_ticks (); // timer_ticks는 컴퓨터가 켜진 뒤 지금까지 흐른 현재 시각을 뜻한다. (작업관리자에 있는 작동시간과 같은 것이다.)
+		struct thread *cur_thread = thread_current(); // 자러 온 스레드의 정보를 가져와 cur_thread에 담음.
 
-	ASSERT (intr_get_level () == INTR_ON);
-	while (timer_elapsed (start) < ticks)
-		thread_yield ();
+		ASSERT (intr_get_level () == INTR_ON); 
+		/* 
+		자러가도 되는 스레드인지 아닌지를 확인하는 것이다. 
+		ASSERT는 안전 장치 같은 개념이다. 
+		ASSERT 괄호 안에 있는 조건이 참이면 그대로 통과한다. 
+		하지만, 거짓이라면 즉시 실행을 멈추고 컴퓨터를 뻗게 만든다. 
+		intr 즉, 인터럽트는 가로채기이다. 
+		CPU가 작업을 하고 있으면 가로채서 다른 작업을 시키는 것이다. 
+		인터럽트가 INTR_ON이라는 것은 언제든 가로채도 된다는 뜻이다.
+		자러가면 안 되는 스레드는 가로채는 것도 안 되기 때문에 'intr_get_level () == INTR_ON'로 구별이 가능하다.
+		*/
+
+		// while (timer_elapsed (start) < ticks) // timer_elapsed는 현재 시각 - 기준 시각(start)한 값이다. 타이머를 시작하고 얼머나 지났는지 알아내는 것이다.
+		// {
+			// thread_yield (); //thread_yield는 일을 안 하고 자러 가는 것이 아닌 줄 맨 뒤로 가서 다시 기다리는 것이기 때문에 CPU가 쉴 수 없는 환경이 만들어 지게 됨.
+		// } 
+
+		enum intr_level isIntr = intr_disable(); 
+		/* 
+		인터럽트를 잠시 INTR_OFF(가로채기 금지) 상태로 바꿔준다. 
+		금지 상태로 만드는 이유는 sleep_list에 잔다고 명부를 적었는데 자려고 하는 찰나에 CPU를 가로채 버린다면, 
+		CPU는 sleep_list를 보고 자고 있는 애라 착각하며 깨우는 작업을 하기 때문에 크래시가 일어남. 
+		*/
+
+		cur_thread -> tick_wakeup = start + ticks; // 일어날 시각(cur_thread -> tick_wakeup)에 현재 시각(start) + 잘 시간(ticks)을 넣는다.
+		list_push_back(&sleep_list, &cur_thread -> elem); // elem은 cur_thread에 있는 고리이다. cur_thread를 다 가져오려면 너무 무겁기 때문에 가볍게 하기 위해 elem로 고리만 걸어 깨우는 리스트에 스레드 이름을 올린 것이다.
+		
+		thread_block(); // 스레드를 재움
+
+		intr_set_level(isIntr); // 스레드가 일어났을 때 가로채기 금지(INTR_OFF)였던 걸 가로채기 가능(INTR_ON) 상태로 바꾸고 다른 작업을 이어 나간다.
+	}
 }
 
 /* Suspends execution for approximately MS milliseconds. */
@@ -123,9 +158,26 @@ timer_print_stats (void) {
 
 /* Timer interrupt handler. */
 static void
-timer_interrupt (struct intr_frame *args UNUSED) {
-	ticks++;
-	thread_tick ();
+timer_interrupt (struct intr_frame *args UNUSED) { // 하드웨어 타이머가 1초에 100번씩 울릴 때 마다 CPU가 자동으로 호출하는 함수이다. 1초에 100번 실행되는 함수인 것이다.
+	ticks++; // 1틱씩 움직임.
+	thread_tick(); // 일하고 있는 스레드가 CPU를 오래 독점하고 있는지 확인하는 함수.
+
+	struct list_elem *l = list_begin(&sleep_list); // elem 고리에 달았던 깨우는 리스트의 고리를 잡음.
+
+	while (l != list_end (&sleep_list)) // 리스트 끝에 도달할 때 까지 반복함.
+	{
+		struct thread *t = list_entry (l, struct thread, elem); // 잡은 고리(l)를 잡아 당겨 struct thread *t을 가져옴. (list_elem에는 깨울 시각이 적혀 있지 않아 struct thread를 가져와 깨울 시각을 알아냄.)
+
+		if (t -> tick_wakeup <= ticks) // 깨울 시각을 가지고 깨울 시간이 되었는지 확인함.
+		{
+			l = list_remove(l); // 깨울 때가 되었으니 sleep_list에서 깨울 스레드의 고리(l)를 뺌.
+			thread_unblock(t); // 스레드를 깨움.
+		}
+		else // 아직 깨울 시간이 안 되었다면?
+		{
+			l = list_next(l); // 다음 고리를 확인함. 
+		}
+	}
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer

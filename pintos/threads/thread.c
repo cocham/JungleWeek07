@@ -27,7 +27,6 @@
 /* List of processes in THREAD_READY state, that is, processes
    that are ready to run but not actually running. */
 static struct list ready_list;
-
 /* Idle thread. */
 static struct thread *idle_thread;
 
@@ -207,6 +206,8 @@ thread_create (const char *name, int priority,
 	/* Add to run queue. */
 	thread_unblock (t);
 
+	thread_yield_priority();
+
 	return tid;
 }
 
@@ -222,6 +223,35 @@ thread_block (void) {
 	ASSERT (intr_get_level () == INTR_OFF);
 	thread_current ()->status = THREAD_BLOCKED;
 	schedule ();
+}
+
+bool thread_diff(const struct list_elem *elem_1, const struct list_elem *elem_2, void *aux UNUSED) // 두 스레드의 우선 순위를 확인하기 위해 두 스레드의 고리를 인자 값을 받고 aux는 부가 정보인데 사용하지 않기 때문에 UNUSED를 표시함.
+{
+	struct thread *thread_1 = list_entry(elem_1, struct thread, elem); // 인자 값으로 받은 고리에서 스레드 포인터를 알아내 변수에 넣음.
+	struct thread *thread_2 = list_entry(elem_2, struct thread, elem); // ''
+
+	if (thread_1 -> priority > thread_2 -> priority) // 두 스레드의 우선 순위를 확인함.
+	{
+		return true; // thread_1의 우선 순위가 높다면 true를 반환함.
+	}
+	else
+	{
+		return false; // thread_2의 우선 순위가 높다면 false를 반환함.
+	}
+}
+
+void thread_yield_priority()
+{
+	if (!list_empty(&ready_list))
+	{
+    	struct list_elem *elem = list_begin(&ready_list);
+    	struct thread *thread_1 = list_entry(elem, struct thread, elem);
+
+    	if (thread_1->priority > thread_current()->priority)
+    	{
+        	thread_yield();
+    	}
+	}
 }
 
 /* Transitions a blocked thread T to the ready-to-run state.
@@ -240,7 +270,7 @@ thread_unblock (struct thread *t) {
 
 	old_level = intr_disable ();
 	ASSERT (t->status == THREAD_BLOCKED);
-	list_push_back (&ready_list, &t->elem);
+	list_insert_ordered(&ready_list, &t->elem, thread_diff, NULL); // 기존: list_push_back (@ready_list, &t->elem); 스레드 t가 깨어나서 ready_list로 이동할 때 위에서 만든 thread_diff 함수를 이용해 우선순위대로 알맞은 위치에 줄을 세움.
 	t->status = THREAD_READY;
 	intr_set_level (old_level);
 }
@@ -303,7 +333,7 @@ thread_yield (void) {
 
 	old_level = intr_disable ();
 	if (curr != idle_thread)
-		list_push_back (&ready_list, &curr->elem);
+		list_insert_ordered (&ready_list, &curr->elem, thread_diff, NULL); // 기존: list_push_back (@ready_list, curr->elem); 돌고 있던 스레드가 CPU를 양보하고 ready_list로 돌아갈 때 위에서 만든 thread_diff 함수를 이용해 우선순위대로 알맞은 위치에 줄을 세움.
 	do_schedule (THREAD_READY);
 	intr_set_level (old_level);
 }
@@ -312,6 +342,7 @@ thread_yield (void) {
 void
 thread_set_priority (int new_priority) {
 	thread_current ()->priority = new_priority;
+	thread_yield_priority();
 }
 
 /* Returns the current thread's priority. */
