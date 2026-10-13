@@ -15,45 +15,42 @@
 #include "userprog/process.h"
 #endif
 
-/* Random value for struct thread's `magic' member.
-   Used to detect stack overflow.  See the big comment at the top
-   of thread.h for details. */
+/* struct thread의 magic 멤버에 사용하는 임의 값. 스택 오버플로를 감지하는
+   데 사용한다. 자세한 내용은 thread.h 상단의 긴 주석을 참고한다. */
 #define THREAD_MAGIC 0xcd6abf4b
 
-/* Random value for basic thread
-   Do not modify this value. */
+/* 기본 스레드에 사용하는 임의 값. 이 값은 변경하지 않는다. */
 #define THREAD_BASIC 0xd42df210
 
-/* List of processes in THREAD_READY state, that is, processes
-   that are ready to run but not actually running. */
+/* THREAD_READY 상태인 프로세스의 목록. 실행할 준비가 되었지만 현재 실행
+   중이지 않은 프로세스들이다. */
 static struct list ready_list;
 
 static struct list sleep_list;
 
-/* Idle thread. */
+/* 유휴 스레드. */
 static struct thread *idle_thread;
 
-/* Initial thread, the thread running init.c:main(). */
+/* 초기 스레드. init.c의 main()을 실행하는 스레드이다. */
 static struct thread *initial_thread;
 
-/* Lock used by allocate_tid(). */
+/* allocate_tid()에서 사용하는 락. */
 static struct lock tid_lock;
 
-/* Thread destruction requests */
+/* 스레드 제거 요청 목록. */
 static struct list destruction_req;
 
-/* Statistics. */
-static long long idle_ticks;   /* # of timer ticks spent idle. */
-static long long kernel_ticks; /* # of timer ticks in kernel threads. */
-static long long user_ticks;   /* # of timer ticks in user programs. */
+/* 통계. */
+static long long idle_ticks;   /* 유휴 상태로 보낸 타이머 틱 수. */
+static long long kernel_ticks; /* 커널 스레드 실행에 사용한 타이머 틱 수. */
+static long long user_ticks;   /* 사용자 프로그램 실행에 사용한 타이머 틱 수. */
 
-/* Scheduling. */
-#define TIME_SLICE 4		  /* # of timer ticks to give each thread. */
-static unsigned thread_ticks; /* # of timer ticks since last yield. */
+/* 스케줄링. */
+#define TIME_SLICE 4		  /* 각 스레드에 할당할 타이머 틱 수. */
+static unsigned thread_ticks; /* 마지막 CPU 양보 이후 경과한 타이머 틱 수. */
 
-/* If false (default), use round-robin scheduler.
-   If true, use multi-level feedback queue scheduler.
-   Controlled by kernel command-line option "-o mlfqs". */
+/* false이면 기본값인 라운드 로빈 스케줄러를 사용한다. true이면 다단계
+   피드백 큐 스케줄러를 사용한다. 커널 명령행 옵션 "-o mlfqs"로 제어한다. */
 bool thread_mlfqs;
 
 static void kernel_thread(thread_func *, void *aux);
@@ -64,85 +61,79 @@ static void init_thread(struct thread *, const char *name, int priority);
 static void do_schedule(int status);
 static void schedule(void);
 static tid_t allocate_tid(void);
-
-/* Returns true if T appears to point to a valid thread. */
+static struct thread *find_max_priority(void);
+/* T가 유효한 스레드를 가리키는 것으로 보이면 true를 반환한다. */
 #define is_thread(t) ((t) != NULL && (t)->magic == THREAD_MAGIC)
 
-/* Returns the running thread.
- * Read the CPU's stack pointer `rsp', and then round that
- * down to the start of a page.  Since `struct thread' is
- * always at the beginning of a page and the stack pointer is
- * somewhere in the middle, this locates the curent thread. */
+/* 현재 실행 중인 스레드를 반환한다. CPU의 스택 포인터 rsp를 읽고 페이지
+ * 시작 주소로 내림한다. struct thread는 항상 페이지 시작에 있고 스택
+ * 포인터는 페이지 중간 어딘가에 있으므로 현재 스레드를 찾을 수 있다. */
 #define running_thread() ((struct thread *)(pg_round_down(rrsp())))
 
-// Global descriptor table for the thread_start.
-// Because the gdt will be setup after the thread_init, we should
-// setup temporal gdt first.
+// thread_start에 사용할 전역 디스크립터 테이블.
+// GDT는 thread_init 이후에 설정되므로
+// 먼저 임시 GDT를 구성해야 한다.
 static uint64_t gdt[3] = {0, 0x00af9a000000ffff, 0x00cf92000000ffff};
 
-/* Initializes the threading system by transforming the code
-   that's currently running into a thread.  This can't work in
-   general and it is possible in this case only because loader.S
-   was careful to put the bottom of the stack at a page boundary.
+/* 현재 실행 중인 코드를 스레드로 전환하여 스레드 시스템을 초기화한다.
+   일반적으로 가능한 방법은 아니며, loader.S에서 스택의 바닥을 페이지
+   경계에 맞추었기 때문에 이 경우에만 가능하다.
 
-   Also initializes the run queue and the tid lock.
+   실행 큐와 스레드 식별자 락도 초기화한다.
 
-   After calling this function, be sure to initialize the page
-   allocator before trying to create any threads with
-   thread_create().
+   이 함수를 호출한 뒤에는 thread_create()로 스레드를 생성하기 전에 반드시
+   페이지 할당기를 초기화해야 한다.
 
-   It is not safe to call thread_current() until this function
-   finishes. */
+   이 함수가 끝나기 전에는 thread_current()를 호출하는 것이 안전하지 않다. */
 // 시스템 부팅시 처음에 한번 실행되는 스레드 초기화
 void thread_init(void)
 {
 	ASSERT(intr_get_level() == INTR_OFF);
 
-	/* Reload the temporal gdt for the kernel
-	 * This gdt does not include the user context.
-	 * The kernel will rebuild the gdt with user context, in gdt_init (). */
+	/* 커널용 임시 GDT를 다시 적재한다. 이 GDT에는 사용자 실행 문맥이
+	 * 포함되어 있지 않다. 커널은 gdt_init()에서 사용자 실행 문맥을 포함한
+	 * GDT를 다시 구성한다. */
 	struct desc_ptr gdt_ds = {
 		.size = sizeof(gdt) - 1,
-		.address = (uint64_t)gdt
-	};
+		.address = (uint64_t)gdt};
 	lgdt(&gdt_ds);
 
-	/* Init the globla thread context */
+	/* 전역 스레드 실행 문맥을 초기화한다. */
 	lock_init(&tid_lock);
 	list_init(&ready_list);
 	list_init(&destruction_req);
 	list_init(&sleep_list);
 
-	/* Set up a thread structure for the running thread. */
+	/* 현재 실행 중인 스레드의 구조체를 설정한다. */
 	initial_thread = running_thread();
 	init_thread(initial_thread, "main", PRI_DEFAULT);
 	initial_thread->status = THREAD_RUNNING;
 	initial_thread->tid = allocate_tid();
 }
 
-/* Starts preemptive thread scheduling by enabling interrupts.
-   Also creates the idle thread. */
+/* 인터럽트를 활성화하여 선점형 스레드 스케줄링을 시작한다. 유휴 스레드도
+   생성한다. */
 void thread_start(void)
 {
-	/* Create the idle thread. */
+	/* 유휴 스레드를 생성한다. */
 	struct semaphore idle_started;
 	sema_init(&idle_started, 0);
 	thread_create("idle", PRI_MIN, idle, &idle_started);
 
-	/* Start preemptive thread scheduling. */
+	/* 선점형 스레드 스케줄링을 시작한다. */
 	intr_enable();
 
-	/* Wait for the idle thread to initialize idle_thread. */
+	/* 유휴 스레드가 idle_thread를 초기화할 때까지 기다린다. */
 	sema_down(&idle_started);
 }
 
-/* Called by the timer interrupt handler at each timer tick.
-   Thus, this function runs in an external interrupt context. */
+/* 매 타이머 틱마다 타이머 인터럽트 처리 함수에서 호출한다. 따라서 이
+   함수는 외부 인터럽트 문맥에서 실행된다. */
 void thread_tick(void)
 {
 	struct thread *t = thread_current();
 
-	/* Update statistics. */
+	/* 통계를 갱신한다. */
 	if (t == idle_thread)
 		idle_ticks++;
 #ifdef USERPROG
@@ -152,52 +143,49 @@ void thread_tick(void)
 	else
 		kernel_ticks++;
 
-	/* Enforce preemption. */
+	/* 선점을 수행하도록 한다. */
 	if (++thread_ticks >= TIME_SLICE)
 		intr_yield_on_return();
 }
 
-/* Prints thread statistics. */
+/* 스레드 통계를 출력한다. */
 void thread_print_stats(void)
 {
 	printf("Thread: %lld idle ticks, %lld kernel ticks, %lld user ticks\n",
 		   idle_ticks, kernel_ticks, user_ticks);
 }
 
-/* Creates a new kernel thread named NAME with the given initial
-   PRIORITY, which executes FUNCTION passing AUX as the argument,
-   and adds it to the ready queue.  Returns the thread identifier
-   for the new thread, or TID_ERROR if creation fails.
+/* 주어진 초기 우선순위 PRIORITY와 이름 NAME을 갖는 커널 스레드를 생성하고
+   준비 큐에 추가한다. 이 스레드는 AUX를 인자로 전달하여 FUNCTION을
+   실행한다. 새 스레드의 식별자를 반환하며, 생성에 실패하면 TID_ERROR를
+   반환한다.
 
-   If thread_start() has been called, then the new thread may be
-   scheduled before thread_create() returns.  It could even exit
-   before thread_create() returns.  Contrariwise, the original
-   thread may run for any amount of time before the new thread is
-   scheduled.  Use a semaphore or some other form of
-   synchronization if you need to ensure ordering.
+   thread_start()가 호출된 상태라면 thread_create()가 반환하기 전에 새
+   스레드가 스케줄링될 수 있고, 심지어 종료될 수도 있다. 반대로 새 스레드가
+   스케줄링되기 전에 기존 스레드가 임의의 시간 동안 실행될 수도 있다. 실행
+   순서를 보장해야 한다면 세마포어나 다른 동기화 수단을 사용한다.
 
-   The code provided sets the new thread's `priority' member to
-   PRIORITY, but no actual priority scheduling is implemented.
-   Priority scheduling is the goal of Problem 1-3. */
-tid_t thread_create(const char *name, int priority,
-                    thread_func *function, void *aux)
+   제공된 코드는 새 스레드의 priority 멤버를 PRIORITY로 설정하지만 실제
+   우선순위 스케줄링은 구현하지 않는다. 우선순위 스케줄링은 문제 1-3의
+   목표이다. */
+tid_t thread_create(const char *name, int priority, thread_func *function, void *aux)
 {
 	struct thread *t;
 	tid_t tid;
 
 	ASSERT(function != NULL);
 
-	/* Allocate thread. */
+	/* 스레드용 메모리를 할당한다. */
 	t = palloc_get_page(PAL_ZERO);
 	if (t == NULL)
 		return TID_ERROR;
 
-	/* Initialize thread. */
+	/* 스레드를 초기화한다. */
 	init_thread(t, name, priority);
 	tid = t->tid = allocate_tid();
 
-	/* Call the kernel_thread if it scheduled.
-	 * Note) rdi is 1st argument, and rsi is 2nd argument. */
+	/* 스케줄링되면 kernel_thread를 호출한다. 참고: rdi는 첫 번째 인자이고
+	 * rsi는 두 번째 인자이다. */
 	t->tf.rip = (uintptr_t)kernel_thread;
 	t->tf.R.rdi = (uint64_t)function;
 	t->tf.R.rsi = (uint64_t)aux;
@@ -207,18 +195,51 @@ tid_t thread_create(const char *name, int priority,
 	t->tf.cs = SEL_KCSEG;
 	t->tf.eflags = FLAG_IF;
 
-	/* Add to run queue. */
+	/* 실행 큐에 추가한다. */
+	enum intr_level old_level;
+	old_level = intr_disable();
 	thread_unblock(t);
+	struct thread *curr = thread_current();
+	if (curr->priority < t->priority)
+	{
+		thread_yield();
+	}
+	intr_set_level(old_level);
 
 	return tid;
 }
 
-/* Puts the current thread to sleep.  It will not be scheduled
-   again until awoken by thread_unblock().
+/*
+	쓰레드 간 우선순위 비교
+	max = 지금까지 가장 높은 스레드
+	t = 이번에 보는 스레드
+*/
+static struct thread *
+find_max_priority()
+{
+	ASSERT(!list_empty(&ready_list));
 
-   This function must be called with interrupts turned off.  It
-   is usually a better idea to use one of the synchronization
-   primitives in synch.h. */
+	struct list_elem *e = list_begin(&ready_list);
+	struct thread *max = list_entry(e, struct thread, elem);
+
+	while (e != list_end(&ready_list))
+	{
+		struct thread *t = list_entry(e, struct thread, elem);
+
+		if (t->priority > max->priority)
+		{
+			max = t;
+		}
+
+		e = list_next(e);
+	}
+
+	return max;
+}
+
+/* 현재 스레드를 잠들게 한다. thread_unblock()으로 깨울 때까지 다시
+   스케줄링되지 않는다. 이 함수는 인터럽트가 비활성화된 상태에서 호출해야
+   한다. 대개 synch.h의 동기화 기본 요소를 사용하는 편이 더 낫다. */
 void thread_block(void)
 {
 	ASSERT(!intr_context());
@@ -226,9 +247,9 @@ void thread_block(void)
 	thread_current()->status = THREAD_BLOCKED;
 	schedule();
 }
-
+/* a<b 비교해서 True False 반환 */
 static bool wakeup_less(const struct list_elem *a, const struct list_elem *b,
-                        void *aus UNUSED)
+						void *aus UNUSED)
 {
 	struct thread *ta = list_entry(a, struct thread, elem);
 	struct thread *tb = list_entry(b, struct thread, elem);
@@ -236,14 +257,21 @@ static bool wakeup_less(const struct list_elem *a, const struct list_elem *b,
 	return ta->wakeup_tick < tb->wakeup_tick;
 }
 
-/* Transitions a blocked thread T to the ready-to-run state.
-   This is an error if T is not blocked.  (Use thread_yield() to
-   make the running thread ready.)
+static bool priority_more(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
+{
+	struct thread *ta = list_entry(a, struct thread, elem);
+	struct thread *tb = list_entry(b, struct thread, elem);
 
-   This function does not preempt the running thread.  This can
-   be important: if the caller had disabled interrupts itself,
-   it may expect that it can atomically unblock a thread and
-   update other data. */
+	return ta->priority > tb->priority;
+}
+
+/* 차단된 스레드 T를 실행 준비 상태로 전환한다. T가 차단 상태가 아니면
+   오류이다. 실행 중인 스레드를 준비 상태로 만들 때는 thread_yield()를
+   사용한다.
+
+   이 함수는 실행 중인 스레드를 선점하지 않는다. 호출자가 직접 인터럽트를
+   비활성화했다면 스레드 차단 해제와 다른 데이터 갱신을 원자적으로 수행할
+   수 있다고 기대할 수 있으므로 이 점이 중요하다. */
 void thread_unblock(struct thread *t)
 {
 	enum intr_level old_level;
@@ -252,7 +280,9 @@ void thread_unblock(struct thread *t)
 
 	old_level = intr_disable();
 	ASSERT(t->status == THREAD_BLOCKED);
-	list_push_back(&ready_list, &t->elem);
+	list_insert_ordered(&ready_list, &t->elem, priority_more, NULL); // ready_list에 넣기
+
+	// list_push_back(&ready_list, &t->elem);
 	t->status = THREAD_READY;
 	intr_set_level(old_level);
 }
@@ -272,38 +302,36 @@ void thread_awake(int64_t current_tick)
 	}
 }
 
-/* Returns the name of the running thread. */
+/* 현재 실행 중인 스레드의 이름을 반환한다. */
 const char *thread_name(void)
 {
 	return thread_current()->name;
 }
 
-/* Returns the running thread.
-   This is running_thread() plus a couple of sanity checks.
-   See the big comment at the top of thread.h for details. */
+/* 현재 실행 중인 스레드를 반환한다. running_thread()에 몇 가지 유효성
+   검사를 추가한 것이다. 자세한 내용은 thread.h 상단의 긴 주석을 참고한다. */
 struct thread *thread_current(void)
 {
 	struct thread *t = running_thread();
-
-	/* Make sure T is really a thread.
-	   If either of these assertions fire, then your thread may
-	   have overflowed its stack.  Each thread has less than 4 kB
-	   of stack, so a few big automatic arrays or moderate
-	   recursion can cause stack overflow. */
+    
+	/* T가 실제 스레드인지 확인한다. 두 단언문 중 하나라도 실패하면
+	   스레드의 스택이 넘쳤을 수 있다. 각 스레드의 스택은 4 kB보다
+	   작으므로, 큰 자동 배열 몇 개나 적당한 깊이의 재귀 호출만으로도 스택
+	   오버플로가 발생할 수 있다. */
 	ASSERT(is_thread(t));
 	ASSERT(t->status == THREAD_RUNNING);
 
 	return t;
 }
 
-/* Returns the running thread's tid. */
+/* 현재 실행 중인 스레드의 식별자 tid를 반환한다. */
 tid_t thread_tid(void)
 {
 	return thread_current()->tid;
 }
 
-/* Deschedules the current thread and destroys it.  Never
-   returns to the caller. */
+/* 현재 스레드를 스케줄링 대상에서 제외하고 제거한다. 호출자로 돌아오지
+   않는다. */
 void thread_exit(void)
 {
 	ASSERT(!intr_context());
@@ -312,15 +340,15 @@ void thread_exit(void)
 	process_exit();
 #endif
 
-	/* Just set our status to dying and schedule another process.
-	   We will be destroyed during the call to schedule_tail(). */
+	/* 현재 상태를 종료 중으로 설정하고 다른 프로세스를 스케줄링한다. 현재
+	   스레드는 schedule_tail() 호출 중에 제거된다. */
 	intr_disable();
 	do_schedule(THREAD_DYING);
 	NOT_REACHED();
 }
 
-/* Yields the CPU.  The current thread is not put to sleep and
-   may be scheduled again immediately at the scheduler's whim. */
+/* CPU를 양보한다. 현재 스레드는 잠들지 않으며, 스케줄러의 결정에 따라 즉시
+   다시 스케줄링될 수 있다. */
 void thread_yield(void)
 {
 	struct thread *curr = thread_current();
@@ -330,47 +358,56 @@ void thread_yield(void)
 
 	old_level = intr_disable();
 	if (curr != idle_thread)
-		list_push_back(&ready_list, &curr->elem);
+		list_insert_ordered(&ready_list, &curr->elem, priority_more, NULL);
+
 	do_schedule(THREAD_READY);
 	intr_set_level(old_level);
 }
 
-/* Sets the current thread's priority to NEW_PRIORITY. */
+/* 현재 스레드의 우선순위를 NEW_PRIORITY로 설정한다. */
 void thread_set_priority(int new_priority)
 {
 	thread_current()->priority = new_priority;
+	enum intr_level old_level;
+	old_level = intr_disable();
+
+	if (!list_empty(&ready_list) && thread_current()->priority < find_max_priority()->priority)
+	{
+		thread_yield();
+	}
+	intr_set_level(old_level);
 }
 
-/* Returns the current thread's priority. */
+/* 현재 스레드의 우선순위를 반환한다. */
 int thread_get_priority(void)
 {
 	return thread_current()->priority;
 }
 
-/* Sets the current thread's nice value to NICE. */
+/* 현재 스레드의 nice 값을 NICE로 설정한다. */
 void thread_set_nice(int nice UNUSED)
 {
-	/* TODO: Your implementation goes here */
+	/* 할 일: 여기에 구현을 작성한다. */
 }
 
-/* Returns the current thread's nice value. */
+/* 현재 스레드의 nice 값을 반환한다. */
 int thread_get_nice(void)
 {
-	/* TODO: Your implementation goes here */
+	/* 할 일: 여기에 구현을 작성한다. */
 	return 0;
 }
 
-/* Returns 100 times the system load average. */
+/* 시스템 평균 부하의 100배를 반환한다. */
 int thread_get_load_avg(void)
 {
-	/* TODO: Your implementation goes here */
+	/* 할 일: 여기에 구현을 작성한다. */
 	return 0;
 }
 
-/* Returns 100 times the current thread's recent_cpu value. */
+/* 현재 스레드의 recent_cpu 값의 100배를 반환한다. */
 int thread_get_recent_cpu(void)
 {
-	/* TODO: Your implementation goes here */
+	/* 할 일: 여기에 구현을 작성한다. */
 	return 0;
 }
 
@@ -383,15 +420,14 @@ void thread_sleep(int64_t wakeup_tick)
 	thread_block();
 }
 
-/* Idle thread.  Executes when no other thread is ready to run.
+/* 유휴 스레드. 실행 준비가 된 다른 스레드가 없을 때 실행된다.
 
-   The idle thread is initially put on the ready list by
-   thread_start().  It will be scheduled once initially, at which
-   point it initializes idle_thread, "up"s the semaphore passed
-   to it to enable thread_start() to continue, and immediately
-   blocks.  After that, the idle thread never appears in the
-   ready list.  It is returned by next_thread_to_run() as a
-   special case when the ready list is empty. */
+   처음에는 thread_start()가 유휴 스레드를 준비 목록에 넣는다. 최초로
+   스케줄링되면 idle_thread를 초기화하고 전달받은 세마포어에 올림 연산을
+   수행하여 thread_start()가 계속 진행하게 한 뒤 즉시 차단된다.
+
+   이후에는 준비 목록에 다시 나타나지 않는다. 준비 목록이 비어 있으면
+   next_thread_to_run()이 특별한 경우로 이 스레드를 반환한다. */
 static void idle(void *idle_started_ UNUSED)
 {
 	struct semaphore *idle_started = idle_started_;
@@ -401,38 +437,34 @@ static void idle(void *idle_started_ UNUSED)
 
 	for (;;)
 	{
-		/* Let someone else run. */
+		/* 다른 스레드가 실행되도록 한다. */
 		intr_disable();
 		thread_block();
 
-		/* Re-enable interrupts and wait for the next one.
+		/* 인터럽트를 다시 활성화하고 다음 인터럽트를 기다린다.
 
-		   The `sti' instruction disables interrupts until the
-		   completion of the next instruction, so these two
-		   instructions are executed atomically.  This atomicity is
-		   important; otherwise, an interrupt could be handled
-		   between re-enabling interrupts and waiting for the next
-		   one to occur, wasting as much as one clock tick worth of
-		   time.
+		   sti 명령은 다음 명령이 완료될 때까지 인터럽트 처리를 유예하므로
+		   두 명령은 원자적으로 실행된다. 이 원자성이 없으면 인터럽트를
+		   다시 활성화한 시점과 다음 인터럽트를 기다리는 시점 사이에
+		   인터럽트가 처리되어 최대 한 클록 틱만큼의 시간을 낭비할 수 있다.
 
-		   See [IA32-v2a] "HLT", [IA32-v2b] "STI", and [IA32-v3a]
-		   7.11.1 "HLT Instruction". */
+		   [IA32-v2a]의 "HLT", [IA32-v2b]의 "STI", [IA32-v3a]의 7.11.1 "HLT
+		   Instruction"을 참고한다. */
 		asm volatile("sti; hlt" : : : "memory");
 	}
 }
 
-/* Function used as the basis for a kernel thread. */
+/* 커널 스레드의 기반이 되는 함수. */
 static void kernel_thread(thread_func *function, void *aux)
 {
 	ASSERT(function != NULL);
 
-	intr_enable(); /* The scheduler runs with interrupts off. */
-	function(aux); /* Execute the thread function. */
-	thread_exit(); /* If function() returns, kill the thread. */
+	intr_enable(); /* 스케줄러는 인터럽트가 비활성화된 상태로 실행된다. */
+	function(aux); /* 스레드 함수를 실행한다. */
+	thread_exit(); /* function()이 반환하면 스레드를 종료한다. */
 }
 
-/* Does basic initialization of T as a blocked thread named
-   NAME. */
+/* T를 이름이 NAME인 차단 상태의 스레드로 기본 초기화한다. */
 static void init_thread(struct thread *t, const char *name, int priority)
 {
 	ASSERT(t != NULL);
@@ -447,11 +479,10 @@ static void init_thread(struct thread *t, const char *name, int priority)
 	t->magic = THREAD_MAGIC;
 }
 
-/* Chooses and returns the next thread to be scheduled.  Should
-   return a thread from the run queue, unless the run queue is
-   empty.  (If the running thread can continue running, then it
-   will be in the run queue.)  If the run queue is empty, return
-   idle_thread. */
+/* 다음으로 스케줄링할 스레드를 선택하여 반환한다. 실행 큐가 비어 있지
+   않다면 큐에서 스레드를 반환해야 한다. 현재 실행 중인 스레드가 계속
+   실행될 수 있다면 실행 큐에 들어 있다. 실행 큐가 비어 있으면
+   idle_thread를 반환한다. */
 static struct thread *next_thread_to_run(void)
 {
 	if (list_empty(&ready_list))
@@ -460,7 +491,7 @@ static struct thread *next_thread_to_run(void)
 		return list_entry(list_pop_front(&ready_list), struct thread, elem);
 }
 
-/* Use iretq to launch the thread */
+/* iretq를 사용하여 스레드를 실행한다. */
 void do_iret(struct intr_frame *tf)
 {
 	__asm __volatile(
@@ -488,33 +519,29 @@ void do_iret(struct intr_frame *tf)
 		: : "g"((uint64_t)tf) : "memory");
 }
 
-/* Switching the thread by activating the new thread's page
-   tables, and, if the previous thread is dying, destroying it.
+/* 새 스레드의 페이지 테이블을 활성화하여 스레드를 전환하고, 이전 스레드가
+   종료 중이면 제거한다.
 
-   At this function's invocation, we just switched from thread
-   PREV, the new thread is already running, and interrupts are
-   still disabled.
+   이 함수가 호출되는 시점에는 스레드 PREV에서 전환한 직후로, 새 스레드가
+   이미 실행 중이며 인터럽트는 여전히 비활성화되어 있다.
 
-   It's not safe to call printf() until the thread switch is
-   complete.  In practice that means that printf()s should be
-   added at the end of the function. */
+   스레드 전환이 완료될 때까지 printf() 호출은 안전하지 않으므로,
+   printf()를 추가하려면 함수 끝부분에 넣어야 한다. */
 static void thread_launch(struct thread *th)
 {
 	uint64_t tf_cur = (uint64_t)&running_thread()->tf;
 	uint64_t tf = (uint64_t)&th->tf;
 	ASSERT(intr_get_level() == INTR_OFF);
 
-	/* The main switching logic.
-	 * We first restore the whole execution context into the intr_frame
-	 * and then switching to the next thread by calling do_iret.
-	 * Note that, we SHOULD NOT use any stack from here
-	 * until switching is done. */
+	/* 스레드 전환의 핵심 로직. 먼저 전체 실행 문맥을 intr_frame에 복원한
+	 * 뒤 do_iret를 호출하여 다음 스레드로 전환한다. 여기서부터 전환이 끝날
+	 * 때까지 어떤 스택도 사용해서는 안 된다. */
 	__asm __volatile(
-		/* Store registers that will be used. */
+		/* 사용할 레지스터를 저장한다. */
 		"push %%rax\n"
 		"push %%rbx\n"
 		"push %%rcx\n"
-		/* Fetch input once */
+		/* 입력값을 한 번만 가져온다. */
 		"movq %0, %%rax\n"
 		"movq %1, %%rcx\n"
 		"movq %%r15, 0(%%rax)\n"
@@ -529,26 +556,26 @@ static void thread_launch(struct thread *th)
 		"movq %%rdi, 72(%%rax)\n"
 		"movq %%rbp, 80(%%rax)\n"
 		"movq %%rdx, 88(%%rax)\n"
-		"pop %%rbx\n" // Saved rcx
+		"pop %%rbx\n" // 저장해 둔 rcx.
 		"movq %%rbx, 96(%%rax)\n"
-		"pop %%rbx\n" // Saved rbx
+		"pop %%rbx\n" // 저장해 둔 rbx.
 		"movq %%rbx, 104(%%rax)\n"
-		"pop %%rbx\n" // Saved rax
+		"pop %%rbx\n" // 저장해 둔 rax.
 		"movq %%rbx, 112(%%rax)\n"
 		"addq $120, %%rax\n"
 		"movw %%es, (%%rax)\n"
 		"movw %%ds, 8(%%rax)\n"
 		"addq $32, %%rax\n"
-		"call __next\n" // read the current rip.
+		"call __next\n" // 현재 명령어 포인터 rip를 읽는다.
 		"__next:\n"
 		"pop %%rbx\n"
 		"addq $(out_iret -  __next), %%rbx\n"
-		"movq %%rbx, 0(%%rax)\n" // rip
-		"movw %%cs, 8(%%rax)\n"	 // cs
+		"movq %%rbx, 0(%%rax)\n" // 명령어 포인터 rip.
+		"movw %%cs, 8(%%rax)\n"	 // 코드 세그먼트 cs.
 		"pushfq\n"
 		"popq %%rbx\n"
-		"mov %%rbx, 16(%%rax)\n" // eflags
-		"mov %%rsp, 24(%%rax)\n" // rsp
+		"mov %%rbx, 16(%%rax)\n" // 플래그 레지스터 eflags.
+		"mov %%rsp, 24(%%rax)\n" // 스택 포인터 rsp.
 		"movw %%ss, 32(%%rax)\n"
 		"mov %%rcx, %%rdi\n"
 		"call do_iret\n"
@@ -556,10 +583,9 @@ static void thread_launch(struct thread *th)
 		: : "g"(tf_cur), "g"(tf) : "memory");
 }
 
-/* Schedules a new process. At entry, interrupts must be off.
- * This function modify current thread's status to status and then
- * finds another thread to run and switches to it.
- * It's not safe to call printf() in the schedule(). */
+/* 새 프로세스를 스케줄링한다. 진입 시 인터럽트가 비활성화되어 있어야 한다.
+ * 현재 스레드의 상태를 status로 변경한 다음 실행할 다른 스레드를 찾아
+ * 전환한다. schedule() 안에서 printf()를 호출하는 것은 안전하지 않다. */
 static void do_schedule(int status)
 {
 	ASSERT(intr_get_level() == INTR_OFF);
@@ -582,39 +608,36 @@ static void schedule(void)
 	ASSERT(intr_get_level() == INTR_OFF);
 	ASSERT(curr->status != THREAD_RUNNING);
 	ASSERT(is_thread(next));
-	/* Mark us as running. */
+	/* 실행 상태로 표시한다. */
 	next->status = THREAD_RUNNING;
 
-	/* Start new time slice. */
+	/* 새 타임 슬라이스를 시작한다. */
 	thread_ticks = 0;
 
 #ifdef USERPROG
-	/* Activate the new address space. */
+	/* 새 주소 공간을 활성화한다. */
 	process_activate(next);
 #endif
 
 	if (curr != next)
 	{
-		/* If the thread we switched from is dying, destroy its struct
-		   thread. This must happen late so that thread_exit() doesn't
-		   pull out the rug under itself.
-		   We just queuing the page free reqeust here because the page is
-		   currently used by the stack.
-		   The real destruction logic will be called at the beginning of the
-		   schedule(). */
+		/* 이전 스레드가 종료 중이면 해당 struct thread를 제거한다.
+		   thread_exit()가 자신의 실행 기반을 없애지 않도록 제거 시점을
+		   늦춰야 한다. 현재 이 페이지를 스택으로 사용하고 있으므로
+		   여기서는 페이지 해제 요청만 큐에 넣는다. 실제 제거 로직은
+		   schedule()의 시작 부분에서 호출된다. */
 		if (curr && curr->status == THREAD_DYING && curr != initial_thread)
 		{
 			ASSERT(curr != next);
 			list_push_back(&destruction_req, &curr->elem);
 		}
 
-		/* Before switching the thread, we first save the information
-		 * of current running. */
+		/* 스레드를 전환하기 전에 현재 실행 중인 스레드의 정보를 저장한다. */
 		thread_launch(next);
 	}
 }
 
-/* Returns a tid to use for a new thread. */
+/* 새 스레드에 사용할 식별자 tid를 반환한다. */
 static tid_t allocate_tid(void)
 {
 	static tid_t next_tid = 1;

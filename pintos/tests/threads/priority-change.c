@@ -26,6 +26,6 @@ static void
 changing_thread (void *aux UNUSED) 
 {
   msg ("Thread 2 now lowering priority.");
-  thread_set_priority (PRI_DEFAULT - 1);
+  thread_set_priority (PRI_DEFAULT - 1); // 문제 발생하는 것으로 보임
   msg ("Thread 2 exiting.");
 }

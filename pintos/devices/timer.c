@@ -23,7 +23,6 @@ static int64_t ticks;
 /* Number of loops per timer tick.
    Initialized by timer_calibrate(). */
 static unsigned loops_per_tick;
-
 static intr_handler_func timer_interrupt;
 static bool too_many_loops(unsigned loops);
 static void busy_wait(int64_t loops);
@@ -42,7 +41,7 @@ void timer_init(void)
 	outb(0x43, 0x34); /* CW: counter 0, LSB then MSB, mode 2, binary. */
 	outb(0x40, count & 0xff);
 	outb(0x40, count >> 8);
-
+	
 	intr_register_ext(0x20, timer_interrupt, "8254 Timer"); // PIT 타이머에서 인터럽트 발생시 timer_interrupt()함수 실행
 }
 
@@ -50,7 +49,7 @@ void timer_init(void)
 void timer_calibrate(void)
 {
 	unsigned high_bit, test_bit;
-
+	
 	ASSERT(intr_get_level() == INTR_ON);
 	printf("Calibrating timer...  ");
 
