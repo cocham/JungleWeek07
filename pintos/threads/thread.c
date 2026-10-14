@@ -63,6 +63,36 @@ static void do_schedule(int status);
 static void schedule (void);
 static tid_t allocate_tid (void);
 
+static struct thread *
+find_max_priority (void) {
+	ASSERT(!list_empty(&ready_list));
+
+	struct list_elem *e = list_begin(&ready_list);
+	struct thread *max = list_entry(e, struct thread, elem);
+
+	while (e != list_end(&ready_list))
+	{
+		struct thread *t = list_entry(e, struct thread, elem);
+
+		if (t->priority > max->priority)
+		{
+			max = t;
+		}
+
+		e = list_next(e);
+	}
+
+	return max;
+}
+
+bool
+priority_more (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) {
+	struct thread *ta = list_entry(a, struct thread, elem);
+	struct thread *tb = list_entry(b, struct thread, elem);
+
+	return ta->priority > tb->priority;
+}
+
 /* Returns true if T appears to point to a valid thread. */
 #define is_thread(t) ((t) != NULL && (t)->magic == THREAD_MAGIC)
 
@@ -182,30 +212,38 @@ thread_create (const char *name, int priority,
 	struct thread *t;
 	tid_t tid;
 
-	ASSERT (function != NULL);
+	ASSERT(function != NULL);
 
-	/* Allocate thread. */
-	t = palloc_get_page (PAL_ZERO);
+	/* 스레드용 메모리를 할당한다. */
+	t = palloc_get_page(PAL_ZERO);
 	if (t == NULL)
 		return TID_ERROR;
 
-	/* Initialize thread. */
-	init_thread (t, name, priority);
-	tid = t->tid = allocate_tid ();
+	/* 스레드를 초기화한다. */
+	init_thread(t, name, priority);
+	tid = t->tid = allocate_tid();
 
-	/* Call the kernel_thread if it scheduled.
-	 * Note) rdi is 1st argument, and rsi is 2nd argument. */
-	t->tf.rip = (uintptr_t) kernel_thread;
-	t->tf.R.rdi = (uint64_t) function;
-	t->tf.R.rsi = (uint64_t) aux;
+	/* 스케줄링되면 kernel_thread를 호출한다. 참고: rdi는 첫 번째 인자이고
+	 * rsi는 두 번째 인자이다. */
+	t->tf.rip = (uintptr_t)kernel_thread;
+	t->tf.R.rdi = (uint64_t)function;
+	t->tf.R.rsi = (uint64_t)aux;
 	t->tf.ds = SEL_KDSEG;
 	t->tf.es = SEL_KDSEG;
 	t->tf.ss = SEL_KDSEG;
 	t->tf.cs = SEL_KCSEG;
 	t->tf.eflags = FLAG_IF;
 
-	/* Add to run queue. */
-	thread_unblock (t);
+	/* 실행 큐에 추가한다. */
+	enum intr_level old_level;
+	old_level = intr_disable();
+	thread_unblock(t);
+	struct thread *curr = thread_current();
+	if (curr->priority < t->priority)
+	{
+		thread_yield();
+	}
+	intr_set_level(old_level);
 
 	return tid;
 }
@@ -236,13 +274,15 @@ void
 thread_unblock (struct thread *t) {
 	enum intr_level old_level;
 
-	ASSERT (is_thread (t));
+	ASSERT(is_thread(t));
 
-	old_level = intr_disable ();
-	ASSERT (t->status == THREAD_BLOCKED);
-	list_push_back (&ready_list, &t->elem);
+	old_level = intr_disable();
+	ASSERT(t->status == THREAD_BLOCKED);
+	list_insert_ordered(&ready_list, &t->elem, priority_more, NULL); // ready_list에 넣기
+
+	// list_push_back(&ready_list, &t->elem);
 	t->status = THREAD_READY;
-	intr_set_level (old_level);
+	intr_set_level(old_level);
 }
 
 /* Returns the name of the running thread. */
@@ -296,22 +336,31 @@ thread_exit (void) {
    may be scheduled again immediately at the scheduler's whim. */
 void
 thread_yield (void) {
-	struct thread *curr = thread_current ();
+	struct thread *curr = thread_current();
 	enum intr_level old_level;
 
-	ASSERT (!intr_context ());
+	ASSERT(!intr_context());
 
-	old_level = intr_disable ();
+	old_level = intr_disable();
 	if (curr != idle_thread)
-		list_push_back (&ready_list, &curr->elem);
-	do_schedule (THREAD_READY);
-	intr_set_level (old_level);
+		list_insert_ordered(&ready_list, &curr->elem, priority_more, NULL);
+
+	do_schedule(THREAD_READY);
+	intr_set_level(old_level);
 }
 
 /* Sets the current thread's priority to NEW_PRIORITY. */
 void
 thread_set_priority (int new_priority) {
-	thread_current ()->priority = new_priority;
+	thread_current()->priority = new_priority;
+	enum intr_level old_level;
+	old_level = intr_disable();
+
+	if (!list_empty(&ready_list) && thread_current()->priority < find_max_priority()->priority)
+	{
+		thread_yield();
+	}
+	intr_set_level(old_level);
 }
 
 /* Returns the current thread's priority. */
