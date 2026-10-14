@@ -110,11 +110,29 @@ void sema_up(struct semaphore *sema)
 	ASSERT(sema != NULL);
 
 	old_level = intr_disable();
+	bool need_yield = false;
+
 	if (!list_empty(&sema->waiters))
-		thread_unblock(list_entry(list_pop_front(&sema->waiters),
-								  struct thread, elem));
+	{
+		struct list_elem *max = list_min(&sema->waiters, priority_more, NULL); // 실제론 max
+		struct thread *cur = thread_current();
+		int p = list_entry(max, struct thread, elem)->priority;
+		list_remove(max);
+
+		thread_unblock(list_entry(max, struct thread, elem));
+
+		if (p > cur->priority)
+		{
+			need_yield = true;
+		}
+	}
 	sema->value++;
 	intr_set_level(old_level);
+
+	if (need_yield)
+	{
+		thread_yield();
+	}
 }
 
 static void sema_test_helper(void *sema_);

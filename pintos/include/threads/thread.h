@@ -13,9 +13,9 @@
 enum thread_status
 {
 	THREAD_RUNNING, /* 실행 중인 스레드. */
-	THREAD_READY,   /* 실행 중이지 않지만 실행 준비가 된 상태. */
+	THREAD_READY,	/* 실행 중이지 않지만 실행 준비가 된 상태. */
 	THREAD_BLOCKED, /* 이벤트 발생을 기다리는 상태. */
-	THREAD_DYING    /* 곧 제거될 상태. */
+	THREAD_DYING	/* 곧 제거될 상태. */
 };
 
 /* 스레드 식별자 자료형. 원하는 자료형으로 재정의할 수 있다. */
@@ -23,9 +23,9 @@ typedef int tid_t;
 #define TID_ERROR ((tid_t) - 1) /* tid_t의 오류 값. */
 
 /* 스레드 우선순위. */
-#define PRI_MIN 0      /* 가장 낮은 우선순위. */
+#define PRI_MIN 0	   /* 가장 낮은 우선순위. */
 #define PRI_DEFAULT 31 /* 기본 우선순위. */
-#define PRI_MAX 63     /* 가장 높은 우선순위. */
+#define PRI_MAX 63	   /* 가장 높은 우선순위. */
 
 /* 커널 스레드 또는 사용자 프로세스.
  *
@@ -79,11 +79,11 @@ typedef int tid_t;
 struct thread
 {
 	/* thread.c에서 관리한다. */
-	tid_t tid;                 /* 스레드 식별자. */
+	tid_t tid;				   /* 스레드 식별자. */
 	enum thread_status status; /* 스레드 상태. */
-	char name[16];             /* 디버깅용 이름. */
-	int priority;              /* 우선순위. */
-	int64_t wakeup_tick;       /* 깨어날 절대 틱. */
+	char name[16];			   /* 디버깅용 이름. */
+	int priority;			   /* 우선순위. */
+	int64_t wakeup_tick;	   /* 깨어날 절대 틱. */
 
 	/* thread.c와 synch.c에서 공유한다. */
 	struct list_elem elem; /* 리스트 원소. */
@@ -99,7 +99,7 @@ struct thread
 
 	/* thread.c에서 관리한다. */
 	struct intr_frame tf; /* 문맥 전환 정보. */
-	unsigned magic;       /* 스택 오버플로를 감지한다. */
+	unsigned magic;		  /* 스택 오버플로를 감지한다. */
 };
 
 void thread_sleep(int64_t wakeupt_tick);
@@ -137,5 +137,6 @@ int thread_get_recent_cpu(void);
 int thread_get_load_avg(void);
 
 void do_iret(struct intr_frame *tf);
+bool priority_more(const struct list_elem *a, const struct list_elem *b, void *aux);
 
 #endif /* threads/thread.h 끝. */

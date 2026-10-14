@@ -31,7 +31,9 @@ OBJECTS = $(patsubst %.c,%.o,$(patsubst %.S,%.o,$(SOURCES)))
 DEPENDS = $(patsubst %.o,%.d,$(OBJECTS))
 
 threads/kernel.lds.s: CPPFLAGS += -P
-threads/kernel.lds.s: threads/kernel.lds.S
+threads/kernel.lds.s: $(SRCDIR)/threads/kernel.lds.S
+	$(CC) -E $(CPPFLAGS) $< -o $@.tmp
+	mv $@.tmp $@
 
 kernel.o: threads/kernel.lds.s $(OBJECTS)
 	$(LD) $(LDFLAGS) -T $< -o $@ $(OBJECTS)

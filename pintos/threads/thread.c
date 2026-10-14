@@ -257,7 +257,7 @@ static bool wakeup_less(const struct list_elem *a, const struct list_elem *b,
 	return ta->wakeup_tick < tb->wakeup_tick;
 }
 
-static bool priority_more(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
+bool priority_more(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
 {
 	struct thread *ta = list_entry(a, struct thread, elem);
 	struct thread *tb = list_entry(b, struct thread, elem);
@@ -313,7 +313,7 @@ const char *thread_name(void)
 struct thread *thread_current(void)
 {
 	struct thread *t = running_thread();
-    
+
 	/* T가 실제 스레드인지 확인한다. 두 단언문 중 하나라도 실패하면
 	   스레드의 스택이 넘쳤을 수 있다. 각 스레드의 스택은 4 kB보다
 	   작으므로, 큰 자동 배열 몇 개나 적당한 깊이의 재귀 호출만으로도 스택
